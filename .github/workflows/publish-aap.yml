@@ -1,0 +1,130 @@
+name: Publish (aap)
+
+# Publish path for aap/ packages in the public-protocols monorepo (MNE-6778).
+# Fires only for releases tagged agent-alignment-protocol-v*. Paths prefixed
+# with aap/. HUMAN-GATED / NOT YET LIVE — npm + PyPI Trusted Publisher configs
+# must be repointed at mnemom/public-protocols + this workflow first. No new
+# secrets introduced.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dispatch-id:
+        description: "Correlation ID from deploy orchestrator"
+        required: false
+        type: string
+      npm-directory:
+        description: "Directory containing package.json to publish"
+        required: false
+        type: string
+        default: "aap/typescript"
+
+permissions: {}
+jobs:
+  validate:
+    permissions:
+      contents: read
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-alignment-protocol-v')
+    name: Validate versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Extract tag version
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#agent-alignment-protocol-v}" >> "$GITHUB_OUTPUT"
+      - name: Check Python version
+        run: |
+          PYPI_VERSION=$(python3 -c "
+          import tomllib
+          with open('aap/pyproject.toml', 'rb') as f:
+              print(tomllib.load(f)['project']['version'])
+          ")
+          if [ "$PYPI_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "ERROR: aap/pyproject.toml version ($PYPI_VERSION) != tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+      - name: Check npm version
+        run: |
+          NPM_VERSION=$(node -p "require('./aap/typescript/package.json').version")
+          if [ "$NPM_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "ERROR: aap/typescript/package.json version ($NPM_VERSION) != tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+
+  test:
+    permissions:
+      contents: read
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-alignment-protocol-v')
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: TypeScript checks
+        working-directory: aap/typescript
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+          npm test
+      - name: Python checks
+        working-directory: aap
+        run: |
+          pip install -e '.[dev]'
+          ruff check .
+          pytest
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [validate, test]
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-alignment-protocol-v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: production
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        working-directory: aap
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+      - name: Publish to PyPI (Trusted Publisher)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: aap/dist/
+
+  publish-npm:
+    needs: [validate, test]
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-alignment-protocol-v')
+    permissions:
+      contents: write
+      id-token: write
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: aap/typescript
+      tag: latest
+
+  dispatch-publish:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      id-token: write
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: ${{ inputs.npm-directory || 'aap/typescript' }}
+      dispatch-id: ${{ inputs.dispatch-id || '' }}
+      tag: latest
+      attach-sbom-to-release: false

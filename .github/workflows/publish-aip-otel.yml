@@ -1,0 +1,124 @@
+name: Publish (aip-otel-exporter)
+
+# Publish path for aip-otel-exporter/ in the public-protocols monorepo
+# (MNE-6778). aip-otel is NOT release-please-managed; a human cuts its GitHub
+# release manually. To disambiguate from the other two packages in this shared
+# repo, tag aip-otel releases as `aip-otel-exporter-v<version>`. Paths prefixed
+# with aip-otel-exporter/. HUMAN-GATED / NOT YET LIVE — Trusted Publisher
+# configs must be repointed at mnemom/public-protocols + this workflow first.
+# No new secrets introduced.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dispatch-id:
+        description: "Correlation ID from deploy orchestrator"
+        required: false
+        type: string
+      npm-directory:
+        description: "Directory containing package.json to publish"
+        required: false
+        type: string
+        default: "aip-otel-exporter/packages/typescript"
+
+permissions: {}
+jobs:
+  validate:
+    permissions:
+      contents: read
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'aip-otel-exporter-v')
+    name: Validate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Extract tag version
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#aip-otel-exporter-v}" >> "$GITHUB_OUTPUT"
+      - name: Check npm version matches tag
+        run: |
+          NPM_VERSION=$(node -p "require('./aip-otel-exporter/packages/typescript/package.json').version")
+          if [ "$NPM_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "ERROR: aip-otel-exporter/packages/typescript/package.json version ($NPM_VERSION) != tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+
+  test:
+    permissions:
+      contents: read
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'aip-otel-exporter-v')
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aip-otel-exporter
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: aip-otel-exporter/package-lock.json
+      - run: npm ci
+      - run: npm run lint --workspace=packages/typescript
+      - run: npm run test --workspace=packages/typescript
+      - run: npm run build --workspace=packages/typescript
+
+  publish-npm:
+    needs: [validate, test]
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'aip-otel-exporter-v')
+    permissions:
+      contents: write
+      id-token: write
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: aip-otel-exporter/packages/typescript
+      tag: latest
+
+  publish-pypi:
+    needs: [validate, test]
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'aip-otel-exporter-v')
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: production
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: pip install build
+      - name: Build
+        working-directory: aip-otel-exporter/packages/python
+        run: python -m build
+      - name: Check if version exists
+        id: check
+        run: |
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('aip-otel-exporter/packages/python/pyproject.toml','rb'))['project']['version'])")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/aip-otel-exporter/${PKG_VERSION}/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish
+        if: steps.check.outputs.exists == 'false'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: aip-otel-exporter/packages/python/dist/
+
+  dispatch-publish:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      id-token: write
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: ${{ inputs.npm-directory || 'aip-otel-exporter/packages/typescript' }}
+      dispatch-id: ${{ inputs.dispatch-id || '' }}
+      tag: latest
+      attach-sbom-to-release: false
