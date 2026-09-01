@@ -1,0 +1,383 @@
+/**
+ * Configuration and duck-typed input types for the AIP OTel Exporter.
+ *
+ * All input types are duck-typed (no hard imports from AIP/AAP packages).
+ * Fields use optional chaining for graceful handling of missing data.
+ */
+
+import type { TracerProvider, Tracer } from "@opentelemetry/api";
+
+// --- Configuration ---
+
+/** Configuration for the AIP OTel Recorder. */
+export interface AIPOTelRecorderConfig {
+  /** OTel TracerProvider to use. Falls back to global provider if not set. */
+  tracerProvider?: TracerProvider;
+  /** Custom tracer name. Defaults to "@mnemom/aip-otel-exporter". */
+  tracerName?: string;
+  /** Custom tracer version. Defaults to package version. */
+  tracerVersion?: string;
+}
+
+/** Configuration for the CF Workers exporter. */
+export interface WorkersExporterConfig {
+  /** OTLP endpoint URL (e.g., "https://otel-collector.example.com/v1/traces"). */
+  endpoint: string;
+  /** Authorization header value (e.g., "Bearer <token>"). */
+  authorization?: string;
+  /** Additional headers to include in the OTLP request. */
+  headers?: Record<string, string>;
+  /** Service name for the resource. Defaults to "aip-otel-exporter". */
+  serviceName?: string;
+  /**
+   * Deployment environment (e.g. "production" / "staging"). Stamped on the
+   * OTLP **resource** as both `deployment.environment` (OTel SemConv) and a
+   * bare `env` attribute — the latter is what the Tempo metrics-generator
+   * promotes to the `env` Prometheus label on `traces_spanmetrics_*`, which
+   * the golden-signals dashboards default-filter to `env="production"`
+   * (MNE-720 / MNE-765). Omit (or pass `"unknown"`) and no env label is
+   * implied — never a false `"production"`. Applies to ALL spans this
+   * exporter emits (recordIntegrityCheck, recordSpan, …) in one place.
+   */
+  env?: string;
+  /**
+   * Cell identifier (e.g. "us-1") for the Cell Architecture sharding model.
+   * Stamped on the OTLP **resource** as a bare `cell_id` attribute when a
+   * non-empty value is supplied — snake_case, low-cardinality enum (a small,
+   * fixed set of cells), mirroring the MNE-765 `env` resource pattern.
+   * Carries onto ALL spans this exporter emits, including the typed AIP/AAP
+   * integrity-check spans that the gateway/observer/api `recordSpan` seam
+   * cannot reach (full-coverage follow-up for MNE-892 / Cell Architecture
+   * Phase 1 §05 WS-C, C2). Omit and no `cell_id` attribute is added.
+   */
+  cell_id?: string;
+  /** Maximum batch size before auto-flush. Defaults to 100. */
+  maxBatchSize?: number;
+}
+
+// --- Duck-typed AIP inputs ---
+
+/** Duck-typed IntegrityConcern (matches AIP's IntegrityConcern shape). */
+export interface ConcernInput {
+  category: string;
+  severity: string;
+  description: string;
+  evidence?: string;
+  relevant_card_field?: string | null;
+  relevant_conscience_value?: string | null;
+}
+
+/** Duck-typed ConscienceContext. */
+export interface ConscienceContextInput {
+  consultation_depth?: string;
+  values_checked?: string[];
+  conflicts?: string[];
+  supports?: string[];
+  considerations?: string[];
+}
+
+/** Duck-typed Attestation (matches AIP's attestation shape from analyze response). */
+export interface AttestationInput {
+  input_commitment?: string;
+  chain_hash?: string;
+  prev_chain_hash?: string | null;
+  merkle_root?: string;
+  merkle_leaf_index?: number | null;
+  signature_verified?: boolean;
+  certificate_id?: string;
+  signature?: string;
+  signing_key_id?: string;
+  zk_proven?: boolean;
+  zk_proof_time_ms?: number;
+}
+
+/** Duck-typed AnalysisMetadata. */
+export interface AnalysisMetadataInput {
+  analysis_model?: string;
+  analysis_duration_ms?: number;
+  thinking_tokens_original?: number;
+  thinking_tokens_analyzed?: number;
+  truncated?: boolean;
+  extraction_confidence?: number;
+}
+
+/** Duck-typed WindowSummary. */
+export interface WindowSummaryInput {
+  size?: number;
+  max_size?: number;
+  verdicts?: {
+    clear?: number;
+    review_needed?: number;
+    boundary_violation?: number;
+  };
+  integrity_ratio?: number;
+  drift_alert_active?: boolean;
+}
+
+/** Duck-typed IntegrityCheckpoint. */
+export interface CheckpointInput {
+  checkpoint_id?: string;
+  agent_id?: string;
+  card_id?: string;
+  session_id?: string;
+  timestamp?: string;
+  thinking_block_hash?: string;
+  provider?: string;
+  model?: string;
+  verdict?: string;
+  concerns?: ConcernInput[];
+  reasoning_summary?: string;
+  conscience_context?: ConscienceContextInput;
+  window_position?: { index?: number; window_size?: number };
+  analysis_metadata?: AnalysisMetadataInput;
+  attestation?: AttestationInput;
+  linked_trace_id?: string | null;
+}
+
+/** Duck-typed IntegritySignal (primary AIP input). */
+export interface IntegritySignalInput {
+  checkpoint: CheckpointInput;
+  proceed?: boolean;
+  recommended_action?: string;
+  window_summary?: WindowSummaryInput;
+  output_analysis?: OutputAnalysisInput;
+  /**
+   * Distinguishes customer-path emissions from verifier-internal and harness
+   * traffic for per-provider rollups. Defaults to `"customer"` when unset.
+   * See `MNEMOM_SPAN_ROLE` in `attributes.ts` for the load-bearing reason.
+   */
+  role?: "customer" | "verifier" | "harness";
+}
+
+// --- Duck-typed AAP inputs ---
+
+/** Duck-typed Violation. */
+export interface ViolationInput {
+  type: string;
+  severity: string;
+  description: string;
+  trace_field?: string | null;
+}
+
+/** Duck-typed Warning. */
+export interface WarningInput {
+  type: string;
+  description: string;
+  trace_field?: string | null;
+}
+
+/** Duck-typed VerificationMetadata. */
+export interface VerificationMetadataInput {
+  algorithm_version?: string;
+  checks_performed?: string[];
+  duration_ms?: number | null;
+}
+
+/** Duck-typed VerificationResult (primary AAP verification input). */
+export interface VerificationResultInput {
+  verified?: boolean;
+  trace_id?: string;
+  card_id?: string;
+  timestamp?: string;
+  violations?: ViolationInput[];
+  warnings?: WarningInput[];
+  verification_metadata?: VerificationMetadataInput;
+  /** Python AAP has similarity_score on the result; TS does not. */
+  similarity_score?: number;
+}
+
+/** Duck-typed ValueAlignment. */
+export interface ValueAlignmentInput {
+  matched?: string[];
+  unmatched?: string[];
+  conflicts?: Array<{
+    initiator_value?: string;
+    responder_value?: string;
+    conflict_type?: string;
+    description?: string;
+  }>;
+}
+
+/** Duck-typed CoherenceResult. */
+export interface CoherenceResultInput {
+  compatible?: boolean;
+  score?: number;
+  value_alignment?: ValueAlignmentInput;
+  proceed?: boolean;
+  conditions?: string[];
+}
+
+/** Duck-typed DriftAnalysis. */
+export interface DriftAnalysisInput {
+  similarity_score?: number;
+  sustained_traces?: number;
+  threshold?: number;
+  drift_direction?: string;
+  specific_indicators?: Array<{
+    indicator?: string;
+    baseline?: number;
+    current?: number;
+    description?: string;
+  }>;
+}
+
+/** Duck-typed DriftAlert (AAP). */
+export interface DriftAlertInput {
+  alert_type?: string;
+  agent_id?: string;
+  card_id?: string;
+  detection_timestamp?: string;
+  analysis?: DriftAnalysisInput;
+  recommendation?: string;
+  trace_ids?: string[];
+}
+
+/** Duck-typed IntegrityDriftAlert (AIP). */
+export interface IntegrityDriftAlertInput {
+  alert_id?: string;
+  agent_id?: string;
+  session_id?: string;
+  checkpoint_ids?: string[];
+  integrity_similarity?: number;
+  sustained_checks?: number;
+  severity?: string;
+  drift_direction?: string;
+  message?: string;
+}
+
+// --- Duck-typed Policy Evaluation input ---
+
+/** Duck-typed policy violation (for policy evaluation events). */
+export interface PolicyViolationInput {
+  type: string;
+  tool?: string;
+  severity: string;
+  reason: string;
+}
+
+/** Duck-typed PolicyEvaluationInput (primary CLPI input). */
+export interface PolicyEvaluationInput {
+  agent_id?: string;
+  policy_id?: string;
+  policy_version?: string;
+  verdict?: string;
+  violations_count?: number;
+  warnings_count?: number;
+  coverage_pct?: number;
+  context?: string;
+  duration_ms?: number;
+  enforcement_mode?: string;
+  violations?: PolicyViolationInput[];
+  /**
+   * Upstream provider whose request CLPI is evaluating (anthropic / openai /
+   * gemini). Emitted as `gen_ai.system` per OTel SemConv. Optional; required
+   * for per-provider SLI-P2 rollups.
+   */
+  upstream_provider?: string;
+  /** Upstream model id (e.g. `claude-opus-4-7`). Emitted as `gen_ai.request.model`. */
+  upstream_model?: string;
+  /**
+   * Span role — see `IntegritySignalInput.role`. Defaults to `"customer"`
+   * when unset.
+   */
+  role?: "customer" | "verifier" | "harness";
+}
+
+// --- Output Analysis fields (added to IntegritySignalInput) ---
+
+/** Duck-typed output analysis metadata. */
+export interface OutputAnalysisInput {
+  output_hash?: string;
+  output_tokens?: number;
+  output_truncated?: boolean;
+  analysis_scope?: string;
+}
+
+// --- Duck-typed Reclassification input ---
+
+/** Duck-typed reclassification input for safety reclassification spans. */
+export interface ReclassificationInput {
+  agent_id?: string;
+  checkpoint_id?: string;
+  trace_id?: string;
+  before_verdict?: string;
+  after_classification?: string;
+  reason?: string;
+  score_before?: number;
+  score_after?: number;
+}
+
+// --- Generic span input ---
+
+/**
+ * Input for {@link WorkersOTelExporter.recordSpan} — emits an arbitrary
+ * INTERNAL span for telemetry outside the AIP/AAP/CLPI domains.
+ *
+ * Intended for callers that need to emit counters/events through the same
+ * OTLP pipeline (e.g. auth events, rate-limit decisions) without rounding
+ * them into an AIP-shaped primitive.
+ */
+export interface SpanInput {
+  /** Span name. Aggregated on in backends — pick a stable, low-cardinality string. */
+  name: string;
+  /** Span attributes. Values of undefined/null are dropped. Keep cardinality bounded. */
+  attributes?: Record<string, unknown>;
+  /** Span events (zero-duration child occurrences), each with their own attributes. */
+  events?: Array<{ name: string; attributes: Record<string, unknown> }>;
+  /** Span status. Defaults to `"ok"`. */
+  status?: "ok" | "error" | "unset";
+  /**
+   * Real operation duration in milliseconds. `recordSpan` is otherwise a
+   * one-shot emission (start == end => 0 wall-time), which makes the
+   * metrics-generator's latency histogram (`traces_spanmetrics_latency_*`)
+   * degenerate ~0 for the span. Set `durationMs` to the measured duration so
+   * the span carries `startTimeUnixNano = end - durationMs` and spanmetrics
+   * records a REAL latency histogram — required for any percentile/latency SLO
+   * built on this span. Omit it for pure counter/availability spans (where only
+   * `status_code` / attribute ratios matter). Non-positive / non-finite values
+   * fall back to the one-shot behavior.
+   */
+  durationMs?: number;
+}
+
+// --- Recorder interface ---
+
+/** Public interface for the AIP OTel Recorder. */
+export interface AIPOTelRecorder {
+  /** Record an AIP integrity check as an OTel span. */
+  recordIntegrityCheck(signal: IntegritySignalInput): void;
+  /** Record an AAP verification result as an OTel span. */
+  recordVerification(result: VerificationResultInput): void;
+  /** Record an AAP coherence check as an OTel span. */
+  recordCoherence(result: CoherenceResultInput): void;
+  /** Record AAP drift detection as an OTel span. */
+  recordDrift(alerts: DriftAlertInput[], tracesAnalyzed?: number): void;
+  /** Record a safety reclassification as an OTel span. */
+  recordReclassification(input: ReclassificationInput): void;
+  /** Record a CLPI policy evaluation as an OTel span. */
+  recordPolicyEvaluation(input: PolicyEvaluationInput): void;
+}
+
+/** Public interface for the CF Workers exporter. */
+export interface WorkersOTelExporter {
+  /** Record an AIP integrity check (builds internal span). */
+  recordIntegrityCheck(signal: IntegritySignalInput): void;
+  /** Record an AAP verification result (builds internal span). */
+  recordVerification(result: VerificationResultInput): void;
+  /** Record an AAP coherence check (builds internal span). */
+  recordCoherence(result: CoherenceResultInput): void;
+  /** Record AAP drift detection (builds internal span). */
+  recordDrift(alerts: DriftAlertInput[], tracesAnalyzed?: number): void;
+  /** Record a safety reclassification (builds internal span). */
+  recordReclassification(input: ReclassificationInput): void;
+  /** Record a CLPI policy evaluation (builds internal span). */
+  recordPolicyEvaluation(input: PolicyEvaluationInput): void;
+  /**
+   * Record a generic INTERNAL span. Escape hatch for callers emitting
+   * telemetry outside the AIP/AAP/CLPI domains (e.g. auth events,
+   * rate-limit decisions) — aggregated by `name` in the backend.
+   */
+  recordSpan(input: SpanInput): void;
+  /** Flush all buffered spans to the OTLP endpoint. Returns a Promise for ctx.waitUntil(). */
+  flush(): Promise<void>;
+}

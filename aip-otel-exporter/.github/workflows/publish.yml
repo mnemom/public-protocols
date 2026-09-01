@@ -1,0 +1,151 @@
+name: Publish
+
+# Canonical publish path for @mnemom/aip-otel-exporter — both npm and PyPI.
+# All npm Node version, registry-url, OIDC, provenance, and SBOM logic lives
+# in mnemom/.github/.github/workflows/npm-publish.yml (ADR-020). To change
+# the npm recipe, edit the canonical workflow there. PyPI publishing uses
+# pypa/gh-action-pypi-publish with OIDC trusted publishing — handled inline
+# since there's no canonical PyPI reusable today.
+#
+# Two trigger paths, one consolidated job graph:
+#   - release: cut a GitHub release with tag `v<version>` → validate → test
+#     → (publish-npm + publish-pypi). Both registries' Trusted Publisher
+#     configs must trust the publish.yml workflow.
+#   - workflow_dispatch: manual fallback for orchestrator dispatch or local
+#     republishes. Routes through the same canonical npm reusable; PyPI
+#     dispatch is not wired (cut a release for a Python publish).
+#
+# Why no inline publish on push-to-main: the previous npm path was Node 20 +
+# empty NODE_AUTH_TOKEN, which produces a 404 against npm's Trusted Publisher
+# endpoint (npm <11 silently sends an empty bearer token). The canonical
+# reusable uses Node 24 with proper OIDC fallback.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dispatch-id:
+        description: "Correlation ID from deploy orchestrator"
+        required: false
+        type: string
+      npm-directory:
+        description: "Directory containing package.json to publish"
+        required: false
+        type: string
+        default: "packages/typescript"
+
+
+permissions: {}
+jobs:
+  # ── Release-triggered: validate → test → publish-npm ─────────────────────
+
+  validate:
+    permissions:
+      contents: read
+    if: github.event_name == 'release'
+    name: Validate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Extract tag version
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Check npm version matches tag
+        run: |
+          NPM_VERSION=$(node -p "require('./packages/typescript/package.json').version")
+          if [ "$NPM_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "ERROR: packages/typescript/package.json version ($NPM_VERSION) != tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+
+  test:
+    permissions:
+      contents: read
+    if: github.event_name == 'release'
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: "npm"
+      - name: Install
+        run: npm ci
+      - name: Lint + typecheck
+        run: npm run lint --workspace=packages/typescript
+      - name: Test
+        run: npm run test --workspace=packages/typescript
+      - name: Build
+        run: npm run build --workspace=packages/typescript
+
+  publish-npm:
+    needs: [validate, test]
+    if: github.event_name == 'release'
+    permissions:
+      contents: write   # canonical reusable attaches SBOM to the release
+      id-token: write   # OIDC → npm Trusted Publisher
+    # mnemom/.github @ scale/step-29-bump-node24-actions merge (ADR-020)
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: packages/typescript
+      tag: latest
+
+  publish-pypi:
+    needs: [validate, test]
+    if: github.event_name == 'release'
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC → PyPI Trusted Publisher
+    environment: production
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: pip install build
+      - name: Build
+        working-directory: packages/python
+        run: python -m build
+      - name: Check if version exists
+        id: check
+        run: |
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('packages/python/pyproject.toml','rb'))['project']['version'])")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/aip-otel-exporter/${PKG_VERSION}/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish
+        if: steps.check.outputs.exists == 'false'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: packages/python/dist/
+
+  # ── Orchestrator / manual dispatch — same canonical recipe, no gate ──────
+
+  dispatch-publish:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      # contents: write is over-granted relative to what dispatch-publish
+      # does (the SBOM-attach step in the reusable is gated on
+      # `event_name == 'release'` and never runs here). But GitHub validates
+      # caller permissions against the called workflow's declared
+      # permissions at workflow load time, before any `if:` is evaluated.
+      contents: write
+      id-token: write
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      # Defensive defaults: GitHub validates `with:` expressions at load
+      # time, before `if:` is evaluated. On a release event the `inputs`
+      # context is empty; the `||` fallback keeps the expression valid on
+      # both event types.
+      npm-directory: ${{ inputs.npm-directory || 'packages/typescript' }}
+      dispatch-id: ${{ inputs.dispatch-id || '' }}
+      tag: latest
+      attach-sbom-to-release: false   # dispatch path has no release to attach to
