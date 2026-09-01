@@ -1,0 +1,56 @@
+{
+  "card_version": "unified/2026-04-26",
+  "card_id": "ac-mcp-filesystem-001",
+  "agent_id": "mcp-filesystem-server",
+  "issued_at": "2026-02-01T03:24:21.422342Z",
+  "autonomy_mode": "enforce",
+  "integrity_mode": "observe",
+  "principal": {
+    "type": "human",
+    "identifier": "did:web:user.example.com",
+    "relationship": "delegated_authority"
+  },
+  "values": {
+    "declared": [
+      "user_control",
+      "transparency",
+      "harm_prevention",
+      "minimal_data"
+    ],
+    "conflicts_with": [
+      "data_exfiltration",
+      "unauthorized_access",
+      "destructive_operations"
+    ]
+  },
+  "autonomy": {
+    "bounded_actions": [
+      "read_file",
+      "list_directory",
+      "file_info"
+    ],
+    "escalation_triggers": [
+      {
+        "condition": "tool in ['write_file', 'append_file', 'create_file']",
+        "action": "escalate",
+        "reason": "Write operations require user approval"
+      },
+      {
+        "condition": "path.startswith('/etc/') or path.startswith('/sys/')",
+        "action": "escalate",
+        "reason": "System paths require explicit approval"
+      }
+    ],
+    "forbidden_actions": [
+      "delete_file",
+      "execute_command",
+      "chmod"
+    ]
+  },
+  "audit": {
+    "trace_format": "ap-trace-v1",
+    "retention_days": 90,
+    "queryable": true,
+    "query_endpoint": "mcp://filesystem/alignment/traces"
+  }
+}

@@ -1,0 +1,147 @@
+name: Publish
+
+# Thin caller for the canonical npm publish recipe — see ADR-020.
+# All Node version, registry-url, OIDC, provenance, and SBOM logic lives in
+# mnemom/.github/.github/workflows/npm-publish.yml. To change the recipe,
+# edit the canonical workflow there; do not re-add steps inline here.
+#
+# Repo-specific logic that stays inline:
+#   - validate: tag vs. typescript/package.json + pyproject.toml versions
+#   - test: TypeScript build/typecheck/test + Python ruff/pytest
+#   - publish-pypi: PyPI is a separate registry, not covered by the npm reusable
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dispatch-id:
+        description: "Correlation ID from deploy orchestrator"
+        required: false
+        type: string
+      npm-directory:
+        description: "Directory containing package.json to publish"
+        required: false
+        type: string
+        default: "typescript"
+
+
+permissions: {}
+jobs:
+  # ── Release-triggered: validate → test → (publish-npm, publish-pypi) ──
+
+  validate:
+    permissions:
+      contents: read
+    if: github.event_name == 'release'
+    name: Validate versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Extract tag version
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Check Python version
+        run: |
+          PYPI_VERSION=$(python3 -c "
+          import tomllib
+          with open('pyproject.toml', 'rb') as f:
+              print(tomllib.load(f)['project']['version'])
+          ")
+          if [ "$PYPI_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "ERROR: pyproject.toml version ($PYPI_VERSION) != tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+      - name: Check npm version
+        run: |
+          NPM_VERSION=$(node -p "require('./typescript/package.json').version")
+          if [ "$NPM_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "ERROR: package.json version ($NPM_VERSION) != tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+
+  test:
+    permissions:
+      contents: read
+    if: github.event_name == 'release'
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: TypeScript checks
+        working-directory: typescript
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+          npm test
+      - name: Python checks
+        run: |
+          pip install -e '.[dev]'
+          ruff check .
+          pytest
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [validate, test]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC → PyPI Trusted Publisher
+      contents: read
+    environment: production
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+      - name: Publish to PyPI (Trusted Publisher)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: dist/
+
+  publish-npm:
+    needs: [validate, test]
+    if: github.event_name == 'release'
+    permissions:
+      contents: write   # for SBOM attach to GitHub Release
+      id-token: write   # for npm OIDC Trusted Publisher
+    # mnemom/.github @ scale/step-29-bump-node24-actions merge (ADR-020)
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: typescript
+      tag: latest
+
+  # ── Orchestrator dispatch publishing ──
+
+  dispatch-publish:
+    if: github.event_name == 'workflow_dispatch'
+    # contents: write is over-granted relative to what dispatch-publish does
+    # (the `gh release upload` step in the reusable workflow is gated on
+    # `event_name == 'release'` and never runs here). But GitHub validates
+    # caller permissions against the called workflow's declared permissions
+    # at workflow load time, before any `if:` is evaluated.
+    permissions:
+      contents: write
+      id-token: write
+    # mnemom/.github @ scale/step-29-bump-node24-actions merge (ADR-020)
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      # Defensive defaults: GitHub validates `with:` expressions at load time,
+      # before `if:` is evaluated. On a release event the `inputs` context is
+      # empty; the `||` fallback keeps the expression valid on both event types.
+      npm-directory: ${{ inputs.npm-directory || 'typescript' }}
+      dispatch-id: ${{ inputs.dispatch-id || '' }}
+      tag: latest
+      attach-sbom-to-release: false   # dispatch path has no release to attach to

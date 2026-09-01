@@ -1,0 +1,76 @@
+{
+  "name": "vendor-deals-agent",
+  "description": "Vendor agent that finds deals and suggests products",
+  "url": "https://vendor.example.com/agent",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": true,
+    "stateTransitionHistory": false
+  },
+  "skills": [
+    {
+      "id": "find-deals",
+      "name": "Find Deals",
+      "description": "Find current deals and promotions"
+    },
+    {
+      "id": "suggest-products",
+      "name": "Suggest Products",
+      "description": "Suggest products based on browsing history"
+    },
+    {
+      "id": "apply-coupon",
+      "name": "Apply Coupon",
+      "description": "Apply available coupons to cart"
+    }
+  ],
+  "alignment": {
+    "card_version": "unified/2026-04-26",
+    "card_id": "ac-vendor-deals-001",
+    "agent_id": "vendor-deals-agent",
+    "issued_at": "2026-02-14T22:49:52.908Z",
+    "autonomy_mode": "observe",
+    "integrity_mode": "observe",
+    "principal": {
+      "type": "organization",
+      "identifier": "did:web:example.com",
+      "relationship": "delegated_authority"
+    },
+    "values": {
+      "declared": [
+        "customer_satisfaction",
+        "transparency",
+        "upselling",
+        "conversion"
+      ],
+      "conflicts_with": [
+        "price_undercutting"
+      ]
+    },
+    "autonomy": {
+      "bounded_actions": [
+        "search",
+        "recommend",
+        "apply_discount",
+        "suggest_bundle"
+      ],
+      "escalation_triggers": [
+        {
+          "condition": "discount > 30",
+          "action": "escalate",
+          "reason": "Large discounts require manager approval"
+        }
+      ],
+      "forbidden_actions": [
+        "price_match_competitor"
+      ]
+    },
+    "audit": {
+      "trace_format": "ap-trace-v1",
+      "retention_days": 90,
+      "queryable": true,
+      "query_endpoint": "https://vendor.example.com/api/traces"
+    }
+  }
+}
