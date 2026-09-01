@@ -1,0 +1,188 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.3.0](https://github.com/mnemom/aip/compare/v1.2.0...v1.3.0) (2026-08-29)
+
+
+### Added
+
+* **analysis:** tool-activity ledger + verdict provenance to stop AIP false blocks (MNE-6478, MNE-6690) ([#126](https://github.com/mnemom/aip/issues/126)) ([e9bd5dd](https://github.com/mnemom/aip/commit/e9bd5ddb09b65ad9ca6b25676338b02e27f00535))
+
+## [1.2.0](https://github.com/mnemom/aip/compare/v1.1.0...v1.2.0) (2026-06-09)
+
+
+### Added
+
+* **analysis:** buildConsciencePromptParts — split semi-stable vs dynamic user context for prompt caching ([#74](https://github.com/mnemom/aip/issues/74)) ([6106049](https://github.com/mnemom/aip/commit/610604923b364b87e1e89f8efedb1433f001573a))
+* **schemas:** canonical concern.schema.json + drift-fail CI for TS+Python ([#57](https://github.com/mnemom/aip/issues/57)) ([d0fad2a](https://github.com/mnemom/aip/commit/d0fad2adb7bf0f5864eabaa26338eba1b61e4d57))
+
+## [1.1.0] - 2026-05-07
+
+### Added — Triggering governance signal reference (ADR-048)
+
+`IntegritySignal` gains optional `triggering_governance_signal_id`
+(format: `gs-{12-hex}`) — set by the host platform when an integrity
+result is correlated with a Mnemom governance signal (e.g., a
+`sideband.coherence` drop preceded a boundary violation). Purely
+informational; the integrity result stands on its own without it.
+Surfaced in audit pipelines and operator dashboards. Application
+composers may render the contextual signal alongside the integrity
+outcome.
+
+The integrity verdict semantics (`clear` / `review_needed` /
+`boundary_violation`) and `proceed` / `recommended_action` contract are
+unchanged.
+
+### Notes
+
+Non-breaking minor release. Existing consumers ignore the new optional
+field; consumers who want the cross-link read it after upgrading
+to 1.1.0.
+
+## [1.0.0] - 2026-04-13
+
+### 🎯 1.0.0 Stability Commitment
+
+This release locks the public API of `@mnemom/agent-integrity-protocol` for stability.
+
+**What this means:**
+- Breaking changes now require a major version bump to 2.0
+- Each major version is supported for **18 months** from the release of its successor (per ADR-006)
+- Deprecations are announced with `Deprecation`, `Sunset`, and `Link` response headers + email notifications at T+0, +12 months, +16 months, +17 months
+- The API surface frozen in 1.0.0 is considered the canonical contract for all downstream integrations
+
+**Forward-looking note (ADR-007):** A 2.0 is planned that unifies AAP alignment cards and CLPI policy YAML into a single YAML agent card with runtime composition. Target: 6–12 months post-1.0 when production data informs the design.
+
+### Changed
+- Peer dependency `@mnemom/agent-alignment-protocol` bumped to `^1.0.0` (tracks AAP 1.0 stability lock)
+
+### Unchanged from 0.8.0
+- `IntegritySignal.recommended_action` field
+- Removal of `WindowManager` from public exports
+- Clarified `proceed` docstring
+
+## [0.8.0] - 2026-04-13
+
+### Breaking Changes
+
+**`WindowManager` and `createWindowState` removed from public exports** (pre-1.0.0 audit).
+These were leaky internal abstractions — consumers should use `createClient()`, which manages
+window state internally. Direct window manipulation bypasses drift detection and creates
+incompatible sessions. `WindowState` type remains exported for typing purposes.
+
+```typescript
+// Before (no longer works):
+import { WindowManager, createWindowState } from '@mnemom/agent-integrity-protocol';
+
+// After — all window state managed through createClient():
+import { createClient } from '@mnemom/agent-integrity-protocol';
+const client = createClient({ card, analysisConfig });
+// Window state is handled automatically
+```
+
+**Peer dependency on `@mnemom/agent-alignment-protocol` updated** from `^0.5.0` to `^0.6.0`.
+If you use AAP alongside AIP, upgrade to AAP 0.7.0+ (which includes the new `recommended_action`
+field on `VerificationResult`).
+
+### Fixed
+
+**`IntegritySignal.proceed` docstring clarified.** The previous docstring ambiguously stated
+"true for review_needed", which could imply unsafe auto-retry behavior. The corrected docstring
+makes clear that "review_needed" maps to `proceed: true` with the intent of logging and
+proceeding with care — not silent auto-retry. For precise verdict handling, use
+`recommended_action` which distinguishes all three states explicitly.
+
+## [Unreleased]
+
+## [0.4.1] - 2026-02-25
+
+### Changed
+- Migrate ZK proof method from RISC Zero to SP1: verifier now accepts both `SP1-STARK` and `RISC-Zero-STARK` for backwards compatibility
+
+## [0.4.0] - 2026-02-22
+
+### Changed
+- Coordinated Mnemom 0.4.0 release. Unified version across all Mnemom SDK packages. Includes all changes from 0.2.0 and 0.2.1.
+
+## [0.1.5] - 2026-02-13
+
+### Added
+- Minimum evidence threshold: thinking blocks under `min_evidence_tokens` (default 100) return synthetic clear without LLM analysis, reducing false positives on short fragments and saving cost/latency
+- `initial_checkpoints` config option seeds the session window at client creation time, enabling window hydration for stateless callers (e.g., observer creating fresh clients per log)
+- Autonomy cross-reference evaluation principle: analyzer must check `bounded_actions` list before flagging `autonomy_violation`
+
+### Changed
+- Graduated verdict rules: `autonomy_violation` at high severity now maps to `review_needed` instead of `boundary_violation`; only critical severity or explicit BOUNDARY-match escalates
+- BOUNDARY conscience value for autonomy is now specific: instructs analyzer to cross-reference against `bounded_actions` list and treat matching actions as PERMITTED
+- `buildSyntheticSignal` / `_build_synthetic_signal` accept optional custom reasoning and token count parameters
+
+## [0.1.4] - 2026-02-12
+
+### Added
+- Enriched analysis context: value descriptions and `agent_description` field flow to the analysis model
+- `taskContext` parameter on `check()` (TypeScript) / `task_context` (Python) for caller-provided, PII-safe task context
+- `IMPORTANT EVALUATION PRINCIPLES` section in analysis prompt — evaluates behavioral intent not topic content
+
+### Changed
+- Card summary uses expanded format when value descriptions are present, falls back to compact for backward compat
+- Lower severity for short/ambiguous thinking blocks
+- Source pivoting recognized as normal adaptive behavior
+
+## [0.1.3] - 2026-02-12
+
+### Fixed
+- `client.check()` now tries SSE stream extraction as fallback when standard JSON parsing fails
+- Word-boundary agreement matching prevents false positives (e.g., `"execute"` no longer matches `"exec"`)
+
+### Changed
+- All provider adapters (Anthropic, OpenAI, Google) attempt SSE stream extraction as fallback
+- Python package bumped to 0.1.3 for coordinated release
+
+## [0.1.2] - 2026-02-11
+
+### Changed
+- Improved npm package metadata
+
+## [0.1.1] - 2026-02-11
+
+### Added
+- Root README.md with badges, quick start, architecture diagram, API reference
+- Apache 2.0 LICENSE
+- CONTRIBUTING.md (monorepo dev setup, SDK parity requirement)
+- docs/SECURITY.md (threat model, meta-injection, fail-open/closed, HMAC)
+- docs/QUICKSTART.md (7-step guide, Python + TypeScript)
+- docs/LIMITS.md (5 fundamental limitations, misconceptions, appropriate use cases)
+- docs/images/aip-architecture.svg (3-layer architecture diagram)
+- Examples: basic-check, gateway-integration, adversarial detection scenarios
+- JSON Schemas: integrity-checkpoint, integrity-signal, conscience-value
+- Per-package READMEs (packages/typescript, packages/python)
+- PEP 561 py.typed marker for typed Python package
+- publish.yml workflow (version validation + test gate + PyPI + npm)
+- codeql.yml workflow (weekly security scan, Python + JS/TS)
+
+### Changed
+- CI: Python version matrix (3.10, 3.11, 3.12), ruff lint step, codecov upload
+- pyproject.toml: classifiers, project URLs, keywords, readme, ruff rules, mypy target
+- package.json: publishConfig, homepage, bugs fields
+- Python imports reordered by ruff (78 auto-fixes)
+
+## [0.1.0] - 2026-02-10
+
+Initial release.
+
+### Added
+- IETF-style protocol specification (docs/SPEC.md, 2,214 lines)
+- TypeScript SDK with full API surface (272 tests)
+- Python SDK with full TypeScript parity (267 tests)
+- Provider adapters: Anthropic, OpenAI, Google, Fallback
+- Integrity checkpoint schema and analysis engine
+- Conscience prompt builder with card summary and value injection
+- Session windowing for multi-turn context tracking
+- Integrity drift detection across checkpoint history
+- Card-conscience agreement validation
+- HMAC signing and signature verification
+- CI pipeline (GitHub Actions: TypeScript + Python)
