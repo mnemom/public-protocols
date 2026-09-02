@@ -1,0 +1,61 @@
+# Consolidated Dependabot config for public-protocols (MNE-6778).
+# Directories are prefixed with each sub-project's new monorepo path.
+version: 2
+updates:
+  # ---- shared ----
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # ---- aip ----
+  - package-ecosystem: "npm"
+    directory: "/aip/packages/typescript"
+    schedule:
+      interval: "weekly"
+    groups:
+      dependencies:
+        patterns: ["*"]
+  - package-ecosystem: "npm"
+    directory: "/aip/packages/verifier"
+    schedule:
+      interval: "weekly"
+    groups:
+      dependencies:
+        patterns: ["*"]
+  - package-ecosystem: "pip"
+    directory: "/aip/packages/python"
+    schedule:
+      interval: "weekly"
+
+  # ---- aap ----
+  - package-ecosystem: "npm"
+    directory: "/aap/typescript"
+    schedule:
+      interval: "weekly"
+    groups:
+      dependencies:
+        patterns: ["*"]
+  - package-ecosystem: "pip"
+    directory: "/aap"
+    schedule:
+      interval: "weekly"
+    groups:
+      dependencies:
+        patterns: ["*"]
+
+  # ---- aip-otel-exporter ----
+  - package-ecosystem: "npm"
+    directory: "/aip-otel-exporter/packages/typescript"
+    schedule:
+      interval: "weekly"
+    groups:
+      dependencies:
+        patterns: ["*"]
+  - package-ecosystem: "pip"
+    directory: "/aip-otel-exporter/packages/python"
+    schedule:
+      interval: "weekly"

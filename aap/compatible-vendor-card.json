@@ -1,0 +1,67 @@
+{
+  "name": "ethical-vendor-agent",
+  "description": "Vendor agent focused on customer satisfaction without aggressive upselling",
+  "url": "https://ethical-vendor.example.com/agent",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "stateTransitionHistory": true
+  },
+  "skills": [
+    {
+      "id": "find-best-value",
+      "name": "Find Best Value",
+      "description": "Find products with best value for customer needs"
+    },
+    {
+      "id": "honest-compare",
+      "name": "Honest Compare",
+      "description": "Compare products including competitor options"
+    }
+  ],
+  "alignment": {
+    "card_version": "unified/2026-04-26",
+    "card_id": "ac-ethical-vendor-001",
+    "agent_id": "ethical-vendor-agent",
+    "issued_at": "2026-02-14T22:49:41.036031Z",
+    "autonomy_mode": "observe",
+    "integrity_mode": "observe",
+    "principal": {
+      "type": "organization",
+      "identifier": "did:web:vendor.example.com",
+      "relationship": "delegated_authority"
+    },
+    "values": {
+      "declared": [
+        "principal_benefit",
+        "transparency",
+        "honesty",
+        "minimal_data"
+      ],
+      "conflicts_with": [
+        "deceptive_marketing",
+        "hidden_fees",
+        "upselling"
+      ]
+    },
+    "autonomy": {
+      "bounded_actions": [
+        "search",
+        "recommend",
+        "apply_discount"
+      ],
+      "escalation_triggers": [],
+      "forbidden_actions": [
+        "upsell_unrelated",
+        "hide_cheaper_options"
+      ]
+    },
+    "audit": {
+      "trace_format": "ap-trace-v1",
+      "retention_days": 90,
+      "queryable": true,
+      "query_endpoint": "https://ethical-vendor.example.com/api/traces"
+    }
+  }
+}

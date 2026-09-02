@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.whl
+build/
+.venv/
+venv/
+
+# Testing
+.tox/
+.coverage*
+coverage.xml
+coverage/
+.pytest_cache/
+htmlcov/
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+.pytype/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+*.pem
+*.key
+
+# Internal design docs
+architecture/
+
+# Claude Code
+.claude/
+.mcp.json
+*.tgz

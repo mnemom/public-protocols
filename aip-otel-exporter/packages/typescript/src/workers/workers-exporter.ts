@@ -1,0 +1,546 @@
+/**
+ * Cloudflare Workers OTLP exporter for AIP/AAP telemetry.
+ *
+ * Implements the `WorkersOTelExporter` interface from types.ts using only
+ * `fetch()` and the OTLP JSON serializer -- zero dependency on the OTel SDK.
+ *
+ * Usage:
+ * ```ts
+ * import { createWorkersExporter } from "@mnemom/aip-otel-exporter/workers";
+ *
+ * const exporter = createWorkersExporter({
+ *   endpoint: "https://otel-collector.example.com/v1/traces",
+ *   authorization: "Bearer <token>",
+ * });
+ *
+ * exporter.recordIntegrityCheck(signal);
+ * ctx.waitUntil(exporter.flush());
+ * ```
+ */
+
+import type {
+  WorkersExporterConfig,
+  WorkersOTelExporter,
+  IntegritySignalInput,
+  VerificationResultInput,
+  CoherenceResultInput,
+  DriftAlertInput,
+  ReclassificationInput,
+  PolicyEvaluationInput,
+  SpanInput,
+} from "../types.js";
+
+import {
+  // Span & event names
+  SPAN_AIP_INTEGRITY_CHECK,
+  SPAN_AAP_VERIFY_TRACE,
+  SPAN_AAP_CHECK_COHERENCE,
+  SPAN_AAP_DETECT_DRIFT,
+  EVENT_AIP_CONCERN,
+  EVENT_AIP_DRIFT_ALERT,
+  EVENT_AAP_VIOLATION,
+  EVENT_AAP_DRIFT_ALERT,
+
+  // AIP Integrity Check attributes
+  AIP_INTEGRITY_CHECKPOINT_ID,
+  AIP_INTEGRITY_VERDICT,
+  AIP_INTEGRITY_AGENT_ID,
+  AIP_INTEGRITY_CARD_ID,
+  AIP_INTEGRITY_SESSION_ID,
+  AIP_INTEGRITY_THINKING_HASH,
+  AIP_INTEGRITY_PROCEED,
+  AIP_INTEGRITY_RECOMMENDED_ACTION,
+  AIP_INTEGRITY_CONCERNS_COUNT,
+  AIP_INTEGRITY_ANALYSIS_MODEL,
+  AIP_INTEGRITY_ANALYSIS_DURATION_MS,
+  AIP_INTEGRITY_THINKING_TOKENS,
+  AIP_INTEGRITY_TRUNCATED,
+  AIP_INTEGRITY_EXTRACTION_CONFIDENCE,
+
+  // Conscience context attributes
+  AIP_CONSCIENCE_CONSULTATION_DEPTH,
+  AIP_CONSCIENCE_VALUES_CHECKED_COUNT,
+  AIP_CONSCIENCE_CONFLICTS_COUNT,
+
+  // Attestation attributes
+  AIP_ATTESTATION_INPUT_COMMITMENT,
+  AIP_ATTESTATION_CHAIN_HASH,
+  AIP_ATTESTATION_MERKLE_ROOT,
+  AIP_ATTESTATION_SIGNATURE_VERIFIED,
+  AIP_ATTESTATION_CERTIFICATE_ID,
+  AIP_ATTESTATION_ZK_PROVEN,
+  AIP_ATTESTATION_ZK_PROOF_TIME_MS,
+
+  // Window summary attributes
+  AIP_WINDOW_SIZE,
+  AIP_WINDOW_INTEGRITY_RATIO,
+  AIP_WINDOW_DRIFT_ALERT_ACTIVE,
+
+  // GenAI SIG forward-compat aliases
+  GEN_AI_EVALUATION_VERDICT,
+  GEN_AI_EVALUATION_SCORE,
+
+  // OTel GenAI SemConv: upstream provider attribution + Mnemom span role
+  GEN_AI_SYSTEM,
+  GEN_AI_REQUEST_MODEL,
+  MNEMOM_SPAN_ROLE,
+
+  // AAP Verification attributes
+  AAP_VERIFICATION_RESULT,
+  AAP_VERIFICATION_SIMILARITY_SCORE,
+  AAP_VERIFICATION_VIOLATIONS_COUNT,
+  AAP_VERIFICATION_WARNINGS_COUNT,
+  AAP_VERIFICATION_TRACE_ID,
+  AAP_VERIFICATION_CARD_ID,
+  AAP_VERIFICATION_DURATION_MS,
+  AAP_VERIFICATION_CHECKS_PERFORMED,
+
+  // AAP Coherence attributes
+  AAP_COHERENCE_COMPATIBLE,
+  AAP_COHERENCE_SCORE,
+  AAP_COHERENCE_PROCEED,
+  AAP_COHERENCE_MATCHED_COUNT,
+  AAP_COHERENCE_CONFLICT_COUNT,
+
+  // AAP Drift attributes
+  AAP_DRIFT_ALERTS_COUNT,
+  AAP_DRIFT_TRACES_ANALYZED,
+
+  // Reclassification attributes
+  SPAN_RECLASSIFICATION,
+  RECLASSIFICATION_AGENT_ID,
+  RECLASSIFICATION_CHECKPOINT_ID,
+  RECLASSIFICATION_TRACE_ID,
+  RECLASSIFICATION_BEFORE_VERDICT,
+  RECLASSIFICATION_AFTER_CLASSIFICATION,
+  RECLASSIFICATION_REASON,
+  RECLASSIFICATION_SCORE_BEFORE,
+  RECLASSIFICATION_SCORE_AFTER,
+
+  // Output analysis attributes
+  AIP_INTEGRITY_OUTPUT_HASH,
+  AIP_INTEGRITY_OUTPUT_TOKENS,
+  AIP_INTEGRITY_OUTPUT_TRUNCATED,
+  AIP_INTEGRITY_ANALYSIS_SCOPE,
+
+  // Policy evaluation attributes
+  SPAN_POLICY_EVALUATE,
+  EVENT_POLICY_VIOLATION,
+  POLICY_AGENT_ID,
+  POLICY_POLICY_ID,
+  POLICY_POLICY_VERSION,
+  POLICY_VERDICT,
+  POLICY_VIOLATIONS_COUNT,
+  POLICY_WARNINGS_COUNT,
+  POLICY_COVERAGE_PCT,
+  POLICY_CONTEXT,
+  POLICY_DURATION_MS,
+  POLICY_ENFORCEMENT_MODE,
+} from "../attributes.js";
+
+import type { OTLPSpan } from "./otlp-serializer.js";
+import { createOTLPSpan, serializeExportPayload } from "./otlp-serializer.js";
+
+// ---------------------------------------------------------------------------
+// Endpoint normalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Grafana Cloud, Tempo, and most OTLP/HTTP receivers expect the traces
+ * subpath at `/v1/traces`. Historical deployments that were configured
+ * with just the ingest base (e.g. `https://otlp-gateway-.../otlp`)
+ * silently 404 on every flush — the OTel spec puts traces at
+ * `<base>/v1/traces`.
+ *
+ * Normalize idempotently so either shape works:
+ *
+ *   https://otlp-gateway-.../otlp            → + /v1/traces
+ *   https://otlp-gateway-.../otlp/v1/traces  → unchanged
+ *
+ * Trailing slashes are tolerated on either input.
+ */
+export function normalizeTracesEndpoint(endpoint: string): string {
+  // Iterative trim (not regex) to avoid polynomial-backtracking on
+  // operator-controlled input.
+  let end = endpoint.length;
+  while (end > 0 && endpoint.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  const trimmed = endpoint.slice(0, end);
+  if (trimmed.endsWith('/v1/traces')) return trimmed;
+  return `${trimmed}/v1/traces`;
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a CF Workers-compatible OTLP exporter that buffers spans in memory
+ * and flushes them via `fetch()`.
+ */
+export function createWorkersExporter(
+  config: WorkersExporterConfig,
+): WorkersOTelExporter {
+  if (!config.endpoint.startsWith('https://')) {
+    console.warn('[aip-otel-exporter] WARNING: OTLP endpoint does not use HTTPS. Telemetry data and credentials will be transmitted in cleartext. Set endpoint to https:// for production use.');
+  }
+
+  const endpoint = normalizeTracesEndpoint(config.endpoint);
+  const serviceName = config.serviceName ?? "aip-otel-exporter";
+  // Resource-level deployment env (MNE-720 / MNE-765). Treat empty/whitespace
+  // as unset so a blank secret never stamps a hollow label.
+  const env = config.env?.trim() || undefined;
+  // Resource-level cell id (MNE-892 full-coverage follow-up). Same
+  // empty/whitespace-as-unset treatment so a blank value never stamps a
+  // hollow `cell_id` label.
+  const cellId = config.cell_id?.trim() || undefined;
+  const maxBatchSize = config.maxBatchSize ?? 100;
+
+  let buffer: OTLPSpan[] = [];
+
+  // -------------------------------------------------------------------
+  // Internal helpers
+  // -------------------------------------------------------------------
+
+  function pushSpan(span: OTLPSpan): void {
+    buffer.push(span);
+    if (buffer.length >= maxBatchSize) {
+      // Fire-and-forget auto-flush; callers should still use ctx.waitUntil(flush())
+      void flush().catch((err) => {
+        console.warn('[aip-otel-exporter] Auto-flush failed:', err instanceof Error ? err.message : 'unknown error');
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // flush()
+  // -------------------------------------------------------------------
+
+  async function flush(): Promise<void> {
+    if (buffer.length === 0) return;
+
+    const spans = buffer;
+    buffer = [];
+
+    const body = serializeExportPayload(spans, serviceName, env, cellId);
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...config.headers,
+    };
+
+    if (config.authorization) {
+      headers["Authorization"] = config.authorization;
+    }
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    if (!response.ok) {
+      console.warn(`[aip-otel-exporter] OTLP export failed: HTTP ${response.status} ${response.statusText}`);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // recordIntegrityCheck
+  // -------------------------------------------------------------------
+
+  function recordIntegrityCheck(signal: IntegritySignalInput): void {
+    const cp = signal?.checkpoint;
+    const meta = cp?.analysis_metadata;
+    const conscience = cp?.conscience_context;
+    const att = cp?.attestation;
+    const win = signal?.window_summary;
+    const out = signal?.output_analysis;
+
+    const attributes: Record<string, unknown> = {
+      // Checkpoint
+      [AIP_INTEGRITY_CHECKPOINT_ID]: cp?.checkpoint_id,
+      [AIP_INTEGRITY_VERDICT]: cp?.verdict,
+      [AIP_INTEGRITY_AGENT_ID]: cp?.agent_id,
+      [AIP_INTEGRITY_CARD_ID]: cp?.card_id,
+      [AIP_INTEGRITY_SESSION_ID]: cp?.session_id,
+      [AIP_INTEGRITY_THINKING_HASH]: cp?.thinking_block_hash,
+
+      // Signal
+      [AIP_INTEGRITY_PROCEED]: signal?.proceed,
+      [AIP_INTEGRITY_RECOMMENDED_ACTION]: signal?.recommended_action,
+      [AIP_INTEGRITY_CONCERNS_COUNT]: cp?.concerns?.length,
+
+      // Analysis metadata
+      [AIP_INTEGRITY_ANALYSIS_MODEL]: meta?.analysis_model,
+      [AIP_INTEGRITY_ANALYSIS_DURATION_MS]: meta?.analysis_duration_ms,
+      [AIP_INTEGRITY_THINKING_TOKENS]: meta?.thinking_tokens_original,
+      [AIP_INTEGRITY_TRUNCATED]: meta?.truncated,
+      [AIP_INTEGRITY_EXTRACTION_CONFIDENCE]: meta?.extraction_confidence,
+
+      // Conscience context
+      [AIP_CONSCIENCE_CONSULTATION_DEPTH]: conscience?.consultation_depth,
+      [AIP_CONSCIENCE_VALUES_CHECKED_COUNT]:
+        conscience?.values_checked?.length,
+      [AIP_CONSCIENCE_CONFLICTS_COUNT]: conscience?.conflicts?.length,
+
+      // Attestation
+      [AIP_ATTESTATION_INPUT_COMMITMENT]: att?.input_commitment,
+      [AIP_ATTESTATION_CHAIN_HASH]: att?.chain_hash,
+      [AIP_ATTESTATION_MERKLE_ROOT]: att?.merkle_root,
+      [AIP_ATTESTATION_SIGNATURE_VERIFIED]: att?.signature_verified,
+      [AIP_ATTESTATION_CERTIFICATE_ID]: att?.certificate_id,
+      [AIP_ATTESTATION_ZK_PROVEN]: att?.zk_proven,
+      [AIP_ATTESTATION_ZK_PROOF_TIME_MS]: att?.zk_proof_time_ms,
+
+      // Window summary
+      [AIP_WINDOW_SIZE]: win?.size,
+      [AIP_WINDOW_INTEGRITY_RATIO]: win?.integrity_ratio,
+      [AIP_WINDOW_DRIFT_ALERT_ACTIVE]: win?.drift_alert_active,
+
+      // Output analysis
+      [AIP_INTEGRITY_OUTPUT_HASH]: out?.output_hash,
+      [AIP_INTEGRITY_OUTPUT_TOKENS]: out?.output_tokens,
+      [AIP_INTEGRITY_OUTPUT_TRUNCATED]: out?.output_truncated,
+      [AIP_INTEGRITY_ANALYSIS_SCOPE]: out?.analysis_scope,
+
+      // GenAI SIG forward-compat aliases
+      [GEN_AI_EVALUATION_VERDICT]: cp?.verdict,
+      [GEN_AI_EVALUATION_SCORE]: win?.integrity_ratio,
+
+      // OTel GenAI SemConv — upstream provider attribution. Mirrors the
+      // manual recorder (record-integrity-check.ts) so SDK ↔ Workers parity
+      // (asserted by test/e2e.test.ts) holds across both paths.
+      [GEN_AI_SYSTEM]: cp?.provider,
+      [GEN_AI_REQUEST_MODEL]: cp?.model,
+
+      // Span role — defaults to "customer" when the signal omits it.
+      [MNEMOM_SPAN_ROLE]: signal?.role ?? "customer",
+    };
+
+    const events: Array<{ name: string; attributes: Record<string, unknown> }> =
+      [];
+
+    // One event per concern
+    if (cp?.concerns) {
+      for (const concern of cp.concerns) {
+        events.push({
+          name: EVENT_AIP_CONCERN,
+          attributes: {
+            category: concern.category,
+            severity: concern.severity,
+            description: concern.description,
+          },
+        });
+      }
+    }
+
+    // Drift alert event when drift is active
+    if (win?.drift_alert_active) {
+      events.push({
+        name: EVENT_AIP_DRIFT_ALERT,
+        attributes: {},
+      });
+    }
+
+    // Pass the analysis duration so spanmetrics records a REAL latency histogram
+    // for `aip.integrity_check` (SLI-2 / SLI-G3 AIP added-latency SLOs). Without
+    // it the span is one-shot (~0) and the duration lives only in the
+    // analysis_duration_ms attribute (Tempo-only). See exporter 0.10.0/0.11.0.
+    pushSpan(
+      createOTLPSpan(SPAN_AIP_INTEGRITY_CHECK, attributes, events, meta?.analysis_duration_ms),
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // recordVerification
+  // -------------------------------------------------------------------
+
+  function recordVerification(result: VerificationResultInput): void {
+    const meta = result?.verification_metadata;
+
+    const attributes: Record<string, unknown> = {
+      [AAP_VERIFICATION_RESULT]: result?.verified,
+      [AAP_VERIFICATION_SIMILARITY_SCORE]: result?.similarity_score,
+      [AAP_VERIFICATION_VIOLATIONS_COUNT]: result?.violations?.length,
+      [AAP_VERIFICATION_WARNINGS_COUNT]: result?.warnings?.length,
+      [AAP_VERIFICATION_TRACE_ID]: result?.trace_id,
+      [AAP_VERIFICATION_CARD_ID]: result?.card_id,
+      [AAP_VERIFICATION_DURATION_MS]: meta?.duration_ms,
+      [AAP_VERIFICATION_CHECKS_PERFORMED]: meta?.checks_performed?.join(", "),
+    };
+
+    const events: Array<{ name: string; attributes: Record<string, unknown> }> =
+      [];
+
+    if (result?.violations) {
+      for (const violation of result.violations) {
+        events.push({
+          name: EVENT_AAP_VIOLATION,
+          attributes: {
+            type: violation.type,
+            severity: violation.severity,
+            description: violation.description,
+          },
+        });
+      }
+    }
+
+    // Real verification duration → real latency histogram (see integrity-check).
+    pushSpan(createOTLPSpan(SPAN_AAP_VERIFY_TRACE, attributes, events, meta?.duration_ms));
+  }
+
+  // -------------------------------------------------------------------
+  // recordCoherence
+  // -------------------------------------------------------------------
+
+  function recordCoherence(result: CoherenceResultInput): void {
+    const attributes: Record<string, unknown> = {
+      [AAP_COHERENCE_COMPATIBLE]: result?.compatible,
+      [AAP_COHERENCE_SCORE]: result?.score,
+      [AAP_COHERENCE_PROCEED]: result?.proceed,
+      [AAP_COHERENCE_MATCHED_COUNT]: result?.value_alignment?.matched?.length,
+      [AAP_COHERENCE_CONFLICT_COUNT]:
+        result?.value_alignment?.conflicts?.length,
+    };
+
+    pushSpan(createOTLPSpan(SPAN_AAP_CHECK_COHERENCE, attributes));
+  }
+
+  // -------------------------------------------------------------------
+  // recordDrift
+  // -------------------------------------------------------------------
+
+  function recordDrift(
+    alerts: DriftAlertInput[],
+    tracesAnalyzed?: number,
+  ): void {
+    const attributes: Record<string, unknown> = {
+      [AAP_DRIFT_ALERTS_COUNT]: alerts?.length,
+      [AAP_DRIFT_TRACES_ANALYZED]: tracesAnalyzed,
+    };
+
+    const events: Array<{ name: string; attributes: Record<string, unknown> }> =
+      [];
+
+    if (alerts) {
+      for (const alert of alerts) {
+        const eventAttrs: Record<string, unknown> = {};
+        if (alert?.alert_type != null) eventAttrs.alert_type = alert.alert_type;
+        if (alert?.agent_id != null) eventAttrs.agent_id = alert.agent_id;
+        if (alert?.card_id != null) eventAttrs.card_id = alert.card_id;
+        if (alert?.analysis?.similarity_score != null)
+          eventAttrs.similarity_score = alert.analysis.similarity_score;
+        if (alert?.analysis?.drift_direction != null)
+          eventAttrs.drift_direction = alert.analysis.drift_direction;
+        if (alert?.recommendation != null)
+          eventAttrs.recommendation = alert.recommendation;
+
+        events.push({
+          name: EVENT_AAP_DRIFT_ALERT,
+          attributes: eventAttrs,
+        });
+      }
+    }
+
+    pushSpan(createOTLPSpan(SPAN_AAP_DETECT_DRIFT, attributes, events));
+  }
+
+  // -------------------------------------------------------------------
+  // recordPolicyEvaluation
+  // -------------------------------------------------------------------
+
+  function recordPolicyEvaluation(input: PolicyEvaluationInput): void {
+    const attributes: Record<string, unknown> = {
+      [POLICY_AGENT_ID]: input?.agent_id,
+      [POLICY_POLICY_ID]: input?.policy_id,
+      [POLICY_POLICY_VERSION]: input?.policy_version,
+      [POLICY_VERDICT]: input?.verdict,
+      [POLICY_VIOLATIONS_COUNT]: input?.violations_count,
+      [POLICY_WARNINGS_COUNT]: input?.warnings_count,
+      [POLICY_COVERAGE_PCT]: input?.coverage_pct,
+      [POLICY_CONTEXT]: input?.context,
+      [POLICY_DURATION_MS]: input?.duration_ms,
+      [POLICY_ENFORCEMENT_MODE]: input?.enforcement_mode,
+
+      // OTel GenAI SemConv — upstream provider attribution. Mirrors the
+      // manual recorder so SDK ↔ Workers parity holds.
+      [GEN_AI_SYSTEM]: input?.upstream_provider,
+      [GEN_AI_REQUEST_MODEL]: input?.upstream_model,
+
+      // Span role — defaults to "customer" when input omits it.
+      [MNEMOM_SPAN_ROLE]: input?.role ?? "customer",
+    };
+
+    const events: Array<{ name: string; attributes: Record<string, unknown> }> =
+      [];
+
+    if (input?.violations) {
+      for (const violation of input.violations) {
+        const eventAttrs: Record<string, unknown> = {
+          type: violation.type,
+          severity: violation.severity,
+          reason: violation.reason,
+        };
+        if (violation.tool != null) eventAttrs.tool = violation.tool;
+        events.push({
+          name: EVENT_POLICY_VIOLATION,
+          attributes: eventAttrs,
+        });
+      }
+    }
+
+    // Real policy-eval duration → real latency histogram for `policy.evaluate`
+    // (CLPI policy-evaluation-overhead SLO). See integrity-check.
+    pushSpan(createOTLPSpan(SPAN_POLICY_EVALUATE, attributes, events, input?.duration_ms));
+  }
+
+  // -------------------------------------------------------------------
+  // recordReclassification
+  // -------------------------------------------------------------------
+
+  function recordReclassification(input: ReclassificationInput): void {
+    const attributes: Record<string, unknown> = {
+      [RECLASSIFICATION_AGENT_ID]: input?.agent_id,
+      [RECLASSIFICATION_CHECKPOINT_ID]: input?.checkpoint_id,
+      [RECLASSIFICATION_TRACE_ID]: input?.trace_id,
+      [RECLASSIFICATION_BEFORE_VERDICT]: input?.before_verdict,
+      [RECLASSIFICATION_AFTER_CLASSIFICATION]: input?.after_classification,
+      [RECLASSIFICATION_REASON]: input?.reason,
+      [RECLASSIFICATION_SCORE_BEFORE]: input?.score_before,
+      [RECLASSIFICATION_SCORE_AFTER]: input?.score_after,
+    };
+
+    pushSpan(createOTLPSpan(SPAN_RECLASSIFICATION, attributes));
+  }
+
+  // -------------------------------------------------------------------
+  // recordSpan — generic escape hatch for non-AIP/AAP telemetry
+  // -------------------------------------------------------------------
+
+  function recordSpan(input: SpanInput): void {
+    const span = createOTLPSpan(
+      input.name,
+      input.attributes ?? {},
+      input.events,
+      input.durationMs,
+    );
+    if (input.status && input.status !== "ok") {
+      span.status = { code: input.status === "error" ? 2 : 0 };
+    }
+    pushSpan(span);
+  }
+
+  // -------------------------------------------------------------------
+  // Public interface
+  // -------------------------------------------------------------------
+
+  return {
+    recordIntegrityCheck,
+    recordVerification,
+    recordCoherence,
+    recordDrift,
+    recordReclassification,
+    recordPolicyEvaluation,
+    recordSpan,
+    flush,
+  };
+}

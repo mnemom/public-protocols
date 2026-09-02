@@ -1,0 +1,120 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-alignment-protocol"
+version = "2.0.0"
+description = "Agent Alignment Protocol - The missing alignment layer for the agent protocol stack"
+readme = "README.md"
+license = "Apache-2.0"
+# Deliberate floor: 3.10 = published-SDK minimum (don't break downstream
+# consumers); dev/CI baseline is pinned to 3.12 via .python-version. ruff
+# target-version / mypy python_version stay at py310 to lint against the floor.
+requires-python = ">=3.10"
+authors = [
+    { name = "Mnemom.ai", email = "dev@mnemom.ai" }
+]
+keywords = [
+    "ai",
+    "agents",
+    "alignment",
+    "a2a",
+    "mcp",
+    "protocol",
+    "transparency",
+    "audit",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "jsonschema>=4.0",
+    "click>=8.0",
+]
+
+[project.scripts]
+aap = "aap.cli.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "mypy>=1.8",
+    "ruff>=0.2",
+    "pre-commit>=3.6",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+]
+
+[project.urls]
+Homepage = "https://github.com/mnemom/aap"
+Documentation = "https://github.com/mnemom/aap#readme"
+Repository = "https://github.com/mnemom/aap.git"
+Issues = "https://github.com/mnemom/aap/issues"
+Changelog = "https://github.com/mnemom/aap/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/schemas",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aap"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+# scikit-learn is an optional, lazily-imported dependency (TF-IDF fallback in
+# verification/features.py) and ships no type stubs; ignore its missing imports
+# without loosening strict checking of aap's own code. (MNE-988)
+[[tool.mypy.overrides]]
+module = "sklearn.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--cov=src/aap --cov-report=xml --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src/aap"]
+
+[tool.coverage.report]
+show_missing = true

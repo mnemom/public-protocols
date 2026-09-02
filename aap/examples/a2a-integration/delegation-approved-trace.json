@@ -1,0 +1,44 @@
+{
+  "trace_id": "tr-delegation-1771109392911",
+  "agent_id": "user-shopping-assistant",
+  "card_id": "ac-user-shopping-001",
+  "timestamp": "2026-02-14T22:49:52.911Z",
+  "action": {
+    "type": "execute",
+    "name": "vendor-coordination",
+    "category": "bounded"
+  },
+  "decision": {
+    "alternatives_considered": [
+      {
+        "option_id": "delegate",
+        "description": "Delegate to ethical-vendor-agent",
+        "score": 1,
+        "flags": []
+      },
+      {
+        "option_id": "reject",
+        "description": "Do not delegate, handle internally",
+        "score": 0
+      }
+    ],
+    "selected": "delegate",
+    "selection_reasoning": "Coherence check with ethical-vendor-agent: score=1.00, compatible=true. No conflicts detected.",
+    "values_applied": [
+      "principal_benefit",
+      "transparency"
+    ],
+    "confidence": 1
+  },
+  "escalation": {
+    "evaluated": true,
+    "triggers_checked": [
+      {
+        "trigger": "delegate_to_vendor",
+        "matched": true
+      }
+    ],
+    "required": false,
+    "reason": "Coherence check passed, delegation within envelope"
+  }
+}

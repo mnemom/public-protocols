@@ -1,0 +1,46 @@
+{
+  "trace_id": "tr-delegation-1771109392910",
+  "agent_id": "user-shopping-assistant",
+  "card_id": "ac-user-shopping-001",
+  "timestamp": "2026-02-14T22:49:52.910Z",
+  "action": {
+    "type": "escalate",
+    "name": "vendor-coordination",
+    "category": "escalation_trigger"
+  },
+  "decision": {
+    "alternatives_considered": [
+      {
+        "option_id": "delegate",
+        "description": "Delegate to vendor-deals-agent",
+        "score": 0.1327,
+        "flags": [
+          "value_conflict"
+        ]
+      },
+      {
+        "option_id": "reject",
+        "description": "Do not delegate, handle internally",
+        "score": 0.8673
+      }
+    ],
+    "selected": "reject",
+    "selection_reasoning": "Coherence check with vendor-deals-agent: score=0.13, compatible=false. Conflicts: Responder's 'upselling' is in initiator's conflicts_with",
+    "values_applied": [
+      "principal_benefit",
+      "transparency"
+    ],
+    "confidence": 0.8673
+  },
+  "escalation": {
+    "evaluated": true,
+    "triggers_checked": [
+      {
+        "trigger": "delegate_to_vendor",
+        "matched": true
+      }
+    ],
+    "required": true,
+    "reason": "Escalated to principal due to value conflicts"
+  }
+}

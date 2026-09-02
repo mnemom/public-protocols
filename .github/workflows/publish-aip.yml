@@ -1,0 +1,112 @@
+name: Publish (aip)
+
+# Publish path for aip/ packages in the public-protocols monorepo (MNE-6778).
+# Fires only for releases whose tag carries this package's component prefix
+# (agent-integrity-protocol-v*), so the three consolidated publish workflows
+# no longer contend on a shared `v<version>` tag. Paths prefixed with aip/.
+#
+# HUMAN-GATED / NOT YET LIVE: npm + PyPI Trusted Publisher configs must be
+# (re)pointed at mnemom/public-protocols + this workflow file before a release
+# will actually publish. No new secrets are introduced here.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dispatch-id:
+        description: "Correlation ID from deploy orchestrator"
+        required: false
+        type: string
+      npm-directory:
+        description: "Directory containing package.json to publish"
+        required: false
+        type: string
+        default: "aip/packages/typescript"
+
+permissions: {}
+jobs:
+  validate:
+    permissions:
+      contents: read
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-integrity-protocol-v')
+    name: Validate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Extract tag version
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#agent-integrity-protocol-v}" >> "$GITHUB_OUTPUT"
+      - name: Check npm version matches tag
+        run: |
+          NPM_VERSION=$(node -p "require('./aip/packages/typescript/package.json').version")
+          if [ "$NPM_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "ERROR: aip/packages/typescript/package.json version ($NPM_VERSION) != tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+
+  test:
+    permissions:
+      contents: read
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-integrity-protocol-v')
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aip/packages/typescript
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  publish-npm:
+    needs: [validate, test]
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-integrity-protocol-v')
+    permissions:
+      contents: write
+      id-token: write
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: aip/packages/typescript
+      tag: latest
+
+  publish-pypi:
+    needs: [validate, test]
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'agent-integrity-protocol-v')
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: production
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: pip install build
+      - name: Build
+        working-directory: aip/packages/python
+        run: python -m build
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: aip/packages/python/dist/
+
+  dispatch-publish:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      id-token: write
+    uses: mnemom/.github/.github/workflows/npm-publish.yml@3b60e34e88113070235f2d55248a3455295be153
+    with:
+      npm-directory: ${{ inputs.npm-directory || 'aip/packages/typescript' }}
+      dispatch-id: ${{ inputs.dispatch-id || '' }}
+      tag: latest
+      attach-sbom-to-release: false

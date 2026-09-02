@@ -1,0 +1,54 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "separate-pull-requests": true,
+  "packages": {
+    "aip/packages/typescript": {
+      "package-name": "@mnemom/agent-integrity-protocol",
+      "component": "agent-integrity-protocol",
+      "include-component-in-tag": true
+    },
+    "aip/packages/python": {
+      "release-type": "python",
+      "package-name": "agent-integrity-proto",
+      "component": "agent-integrity-proto",
+      "include-component-in-tag": true,
+      "skip-github-release": true
+    },
+    "aap/typescript": {
+      "package-name": "@mnemom/agent-alignment-protocol",
+      "component": "agent-alignment-protocol",
+      "include-component-in-tag": true,
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "aap/pyproject.toml",
+          "jsonpath": "$.project.version"
+        }
+      ]
+    }
+  },
+  "changelog-sections": [
+    { "type": "feat", "section": "Added" },
+    { "type": "fix", "section": "Fixed" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "deps", "section": "Dependencies" },
+    { "type": "refactor", "section": "Changed" },
+    { "type": "revert", "section": "Reverted" },
+    { "type": "docs", "section": "Docs" },
+    { "type": "chore", "section": "Chore", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "ci", "section": "CI", "hidden": true },
+    { "type": "build", "section": "Build", "hidden": true }
+  ],
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "aip",
+      "components": [
+        "@mnemom/agent-integrity-protocol",
+        "agent-integrity-proto"
+      ]
+    }
+  ]
+}

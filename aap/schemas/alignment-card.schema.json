@@ -1,0 +1,454 @@
+{
+  "$defs": {
+    "AlignmentMode": {
+      "description": "Master-switch mode shared by autonomy_mode and integrity_mode (unified / ADR-039).",
+      "enum": [
+        "off",
+        "observe",
+        "nudge",
+        "enforce"
+      ],
+      "title": "AlignmentMode",
+      "type": "string"
+    },
+    "Audit": {
+      "description": "Audit trail commitments (unified / ADR-039 §audit). Renamed from the legacy AAP 0.5.0 `audit_commitment`; semantics preserved.",
+      "properties": {
+        "trace_format": {
+          "default": "ap-trace-v1",
+          "description": "Trace format identifier",
+          "title": "Trace Format",
+          "type": "string"
+        },
+        "retention_days": {
+          "description": "Minimum retention period in days",
+          "minimum": 0,
+          "title": "Retention Days",
+          "type": "integer"
+        },
+        "queryable": {
+          "description": "Whether traces can be queried externally",
+          "title": "Queryable",
+          "type": "boolean"
+        },
+        "query_endpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Endpoint for trace queries (required if queryable=true)",
+          "title": "Query Endpoint"
+        },
+        "tamper_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TamperEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tamper-evidence mechanism"
+        }
+      },
+      "required": [
+        "retention_days",
+        "queryable"
+      ],
+      "title": "Audit",
+      "type": "object"
+    },
+    "Autonomy": {
+      "description": "Autonomy bounds and escalation triggers (unified / ADR-039 §autonomy). Renamed from the legacy AAP 0.5.0 `autonomy_envelope`; semantics preserved.",
+      "properties": {
+        "bounded_actions": {
+          "description": "Actions permitted without escalation",
+          "items": {
+            "type": "string"
+          },
+          "title": "Bounded Actions",
+          "type": "array"
+        },
+        "escalation_triggers": {
+          "description": "Conditions requiring escalation",
+          "items": {
+            "$ref": "#/$defs/EscalationTrigger"
+          },
+          "title": "Escalation Triggers",
+          "type": "array"
+        },
+        "max_autonomous_value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonetaryValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Maximum transaction value without escalation"
+        },
+        "forbidden_actions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Actions never permitted",
+          "title": "Forbidden Actions"
+        }
+      },
+      "required": [
+        "bounded_actions"
+      ],
+      "title": "Autonomy",
+      "type": "object"
+    },
+    "EscalationTrigger": {
+      "description": "Condition that triggers escalation (unified / ADR-039 §autonomy).",
+      "properties": {
+        "condition": {
+          "description": "Condition expression",
+          "title": "Condition",
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/TriggerAction",
+          "description": "Action to take when trigger matches"
+        },
+        "reason": {
+          "description": "Human-readable explanation",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "condition",
+        "action",
+        "reason"
+      ],
+      "title": "EscalationTrigger",
+      "type": "object"
+    },
+    "HierarchyType": {
+      "description": "How value conflicts are resolved.",
+      "enum": [
+        "lexicographic",
+        "weighted",
+        "contextual"
+      ],
+      "title": "HierarchyType",
+      "type": "string"
+    },
+    "MonetaryValue": {
+      "description": "Monetary value specification.",
+      "properties": {
+        "amount": {
+          "description": "Numeric amount",
+          "title": "Amount",
+          "type": "number"
+        },
+        "currency": {
+          "default": "USD",
+          "description": "ISO 4217 currency code",
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount"
+      ],
+      "title": "MonetaryValue",
+      "type": "object"
+    },
+    "Principal": {
+      "description": "Principal relationship declaration (unified / ADR-039 §principal).",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/PrincipalType",
+          "description": "Type of principal"
+        },
+        "identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Principal identifier (DID, email, org ID). Required when type != 'unspecified'.",
+          "title": "Identifier"
+        },
+        "relationship": {
+          "$ref": "#/$defs/RelationshipType",
+          "description": "Nature of authority delegation"
+        },
+        "escalation_contact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Endpoint for escalation notifications",
+          "title": "Escalation Contact"
+        }
+      },
+      "required": [
+        "type",
+        "relationship"
+      ],
+      "title": "Principal",
+      "type": "object"
+    },
+    "PrincipalType": {
+      "description": "Type of principal the agent serves.",
+      "enum": [
+        "human",
+        "organization",
+        "agent",
+        "unspecified"
+      ],
+      "title": "PrincipalType",
+      "type": "string"
+    },
+    "RelationshipType": {
+      "description": "Nature of authority delegation from principal to agent.",
+      "enum": [
+        "delegated_authority",
+        "advisory",
+        "autonomous"
+      ],
+      "title": "RelationshipType",
+      "type": "string"
+    },
+    "TamperEvidence": {
+      "description": "Tamper-evidence mechanism for audit logs.",
+      "enum": [
+        "append_only",
+        "signed",
+        "merkle"
+      ],
+      "title": "TamperEvidence",
+      "type": "string"
+    },
+    "TriggerAction": {
+      "description": "Action to take when escalation trigger matches.",
+      "enum": [
+        "escalate",
+        "deny",
+        "log"
+      ],
+      "title": "TriggerAction",
+      "type": "string"
+    },
+    "ValueDefinition": {
+      "description": "Definition of a custom value (unified / ADR-039 §values).",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable name (optional)",
+          "title": "Name"
+        },
+        "description": {
+          "description": "What this value means operationally",
+          "title": "Description",
+          "type": "string"
+        },
+        "priority": {
+          "default": 0,
+          "description": "Priority for lexicographic/weighted ordering (higher = more important)",
+          "title": "Priority",
+          "type": "number"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "ValueDefinition",
+      "type": "object"
+    },
+    "Values": {
+      "description": "Value declarations (unified / ADR-039 §values).",
+      "properties": {
+        "declared": {
+          "description": "List of value identifiers",
+          "items": {
+            "type": "string"
+          },
+          "title": "Declared",
+          "type": "array"
+        },
+        "definitions": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/ValueDefinition"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Definitions for non-standard values",
+          "title": "Definitions"
+        },
+        "conflicts_with": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Values this agent refuses to coordinate with",
+          "title": "Conflicts With"
+        },
+        "hierarchy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HierarchyType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How value conflicts are resolved"
+        }
+      },
+      "required": [
+        "declared"
+      ],
+      "title": "Values",
+      "type": "object"
+    }
+  },
+  "description": "Alignment Card — Agent alignment declaration (unified / ADR-039).\n\nA structured document declaring an agent's alignment posture. It MUST be\nmachine-readable (JSON) and SHOULD be human-readable. This is the unified\ncard shape accepted by `mnemom card validate` and the Mnemom platform;\nit renames the legacy AAP 0.5.0 `autonomy_envelope`→`autonomy` and\n`audit_commitment`→`audit` and adds the top-level master switches\n`autonomy_mode` + `integrity_mode`. Semantics are preserved.\n\nExample:\n    card = AlignmentCard(\n        card_version=\"unified/2026-04-26\",\n        card_id=\"ac-12345\",\n        agent_id=\"did:web:agent.example.com\",\n        issued_at=datetime.now(timezone.utc),\n        autonomy_mode=AlignmentMode.OBSERVE,\n        integrity_mode=AlignmentMode.OBSERVE,\n        principal=Principal(\n            type=PrincipalType.HUMAN,\n            identifier=\"did:web:user.example.com\",\n            relationship=RelationshipType.DELEGATED_AUTHORITY,\n        ),\n        values=Values(declared=[\"principal_benefit\", \"transparency\"]),\n        autonomy=Autonomy(\n            bounded_actions=[\"search\", \"recommend\"],\n            escalation_triggers=[\n                EscalationTrigger(\n                    condition='action_type == \"purchase\"',\n                    action=TriggerAction.ESCALATE,\n                    reason=\"Purchases require approval\",\n                )\n            ],\n        ),\n        audit=Audit(\n            retention_days=90,\n            queryable=True,\n            query_endpoint=\"https://agent.example.com/api/traces\",\n        ),\n    )",
+  "properties": {
+    "card_version": {
+      "default": "unified/2026-04-26",
+      "description": "Unified alignment-card schema version (date-anchored identifier)",
+      "pattern": "^unified/\\d{4}-\\d{2}-\\d{2}$",
+      "title": "Card Version",
+      "type": "string"
+    },
+    "card_id": {
+      "description": "Unique identifier for this card (UUID or URI)",
+      "title": "Card Id",
+      "type": "string"
+    },
+    "agent_id": {
+      "description": "Identifier for the agent (DID, URL, or UUID)",
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "issued_at": {
+      "description": "When this card was issued",
+      "format": "date-time",
+      "title": "Issued At",
+      "type": "string"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When this card expires",
+      "title": "Expires At"
+    },
+    "autonomy_mode": {
+      "$ref": "#/$defs/AlignmentMode",
+      "description": "Master switch for the action-policing pipeline (off | observe | nudge | enforce)"
+    },
+    "integrity_mode": {
+      "$ref": "#/$defs/AlignmentMode",
+      "description": "Master switch for the values/conscience pipeline (off | observe | nudge | enforce)"
+    },
+    "principal": {
+      "$ref": "#/$defs/Principal",
+      "description": "Principal relationship declaration"
+    },
+    "values": {
+      "$ref": "#/$defs/Values",
+      "description": "Value declarations"
+    },
+    "autonomy": {
+      "$ref": "#/$defs/Autonomy",
+      "description": "Autonomy bounds and escalation triggers"
+    },
+    "audit": {
+      "$ref": "#/$defs/Audit",
+      "description": "Audit trail commitments"
+    },
+    "extensions": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Protocol-specific extensions",
+      "title": "Extensions"
+    }
+  },
+  "required": [
+    "card_id",
+    "agent_id",
+    "issued_at",
+    "autonomy_mode",
+    "integrity_mode",
+    "principal",
+    "values",
+    "autonomy",
+    "audit"
+  ],
+  "title": "AlignmentCard",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aap.dev/schemas/alignment-card-unified.json"
+}

@@ -1,0 +1,46 @@
+{
+  "card_version": "unified/2026-04-26",
+  "card_id": "ac-vendor-agent-001",
+  "agent_id": "vendor-sales-agent",
+  "issued_at": "2026-01-31T23:59:08.997485Z",
+  "autonomy_mode": "observe",
+  "integrity_mode": "observe",
+  "principal": {
+    "type": "organization",
+    "identifier": "did:web:vendor.example.com",
+    "relationship": "delegated_authority"
+  },
+  "values": {
+    "declared": [
+      "customer_satisfaction",
+      "sales_conversion",
+      "upselling",
+      "data_collection"
+    ],
+    "conflicts_with": [
+      "price_comparison"
+    ]
+  },
+  "autonomy": {
+    "bounded_actions": [
+      "present_products",
+      "offer_upgrades",
+      "collect_preferences"
+    ],
+    "escalation_triggers": [
+      {
+        "condition": "discount > 20",
+        "action": "escalate",
+        "reason": "Large discount needs approval"
+      }
+    ],
+    "forbidden_actions": [
+      "price_match_competitor"
+    ]
+  },
+  "audit": {
+    "trace_format": "ap-trace-v1",
+    "retention_days": 30,
+    "queryable": false
+  }
+}

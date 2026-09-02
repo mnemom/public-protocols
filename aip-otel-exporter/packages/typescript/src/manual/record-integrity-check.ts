@@ -1,0 +1,185 @@
+/**
+ * Records an AIP IntegritySignal as an OpenTelemetry span.
+ *
+ * Maps all 27 planned attributes from the checkpoint, signal, analysis_metadata,
+ * conscience_context, attestation, and window_summary onto a single INTERNAL span.
+ * Concerns are emitted as individual span events, and a drift alert event is
+ * added when the window summary indicates active drift.
+ */
+
+import type { Span, Tracer, Attributes } from "@opentelemetry/api";
+import type { IntegritySignalInput } from "../types.js";
+
+import {
+  // Span & event names
+  SPAN_AIP_INTEGRITY_CHECK,
+  EVENT_AIP_CONCERN,
+  EVENT_AIP_DRIFT_ALERT,
+
+  // Checkpoint attributes
+  AIP_INTEGRITY_CHECKPOINT_ID,
+  AIP_INTEGRITY_VERDICT,
+  AIP_INTEGRITY_AGENT_ID,
+  AIP_INTEGRITY_CARD_ID,
+  AIP_INTEGRITY_SESSION_ID,
+  AIP_INTEGRITY_THINKING_HASH,
+
+  // Signal-level attributes
+  AIP_INTEGRITY_PROCEED,
+  AIP_INTEGRITY_RECOMMENDED_ACTION,
+  AIP_INTEGRITY_CONCERNS_COUNT,
+
+  // Analysis metadata attributes
+  AIP_INTEGRITY_ANALYSIS_MODEL,
+  AIP_INTEGRITY_ANALYSIS_DURATION_MS,
+  AIP_INTEGRITY_THINKING_TOKENS,
+  AIP_INTEGRITY_TRUNCATED,
+  AIP_INTEGRITY_EXTRACTION_CONFIDENCE,
+
+  // Conscience context attributes
+  AIP_CONSCIENCE_CONSULTATION_DEPTH,
+  AIP_CONSCIENCE_VALUES_CHECKED_COUNT,
+  AIP_CONSCIENCE_CONFLICTS_COUNT,
+
+  // Attestation attributes
+  AIP_ATTESTATION_INPUT_COMMITMENT,
+  AIP_ATTESTATION_CHAIN_HASH,
+  AIP_ATTESTATION_MERKLE_ROOT,
+  AIP_ATTESTATION_SIGNATURE_VERIFIED,
+  AIP_ATTESTATION_CERTIFICATE_ID,
+  AIP_ATTESTATION_ZK_PROVEN,
+  AIP_ATTESTATION_ZK_PROOF_TIME_MS,
+
+  // Window summary attributes
+  AIP_WINDOW_SIZE,
+  AIP_WINDOW_INTEGRITY_RATIO,
+  AIP_WINDOW_DRIFT_ALERT_ACTIVE,
+
+  // Output analysis attributes
+  AIP_INTEGRITY_OUTPUT_HASH,
+  AIP_INTEGRITY_OUTPUT_TOKENS,
+  AIP_INTEGRITY_OUTPUT_TRUNCATED,
+  AIP_INTEGRITY_ANALYSIS_SCOPE,
+
+  // GenAI forward-compat aliases
+  GEN_AI_EVALUATION_VERDICT,
+  GEN_AI_EVALUATION_SCORE,
+
+  // OTel GenAI SemConv: upstream provider attribution + Mnemom span role
+  GEN_AI_SYSTEM,
+  GEN_AI_REQUEST_MODEL,
+  MNEMOM_SPAN_ROLE,
+} from "../attributes.js";
+
+import { buildSpan } from "./span-builder.js";
+
+/**
+ * Record an IntegritySignal as an OTel span with all 27 attributes, concern
+ * events, and an optional drift alert event.
+ *
+ * All inputs are duck-typed -- every field is accessed via optional chaining so
+ * missing data is silently skipped rather than throwing.
+ */
+export function recordIntegrityCheck(
+  tracer: Tracer,
+  signal: IntegritySignalInput,
+): Span {
+  const cp = signal?.checkpoint;
+  const meta = cp?.analysis_metadata;
+  const conscience = cp?.conscience_context;
+  const att = cp?.attestation;
+  const win = signal?.window_summary;
+  const out = signal?.output_analysis;
+
+  // --- Attributes (27 domain + 2 GenAI aliases) ---
+
+  const attributes: Record<string, unknown> = {
+    // Checkpoint
+    [AIP_INTEGRITY_CHECKPOINT_ID]: cp?.checkpoint_id,
+    [AIP_INTEGRITY_VERDICT]: cp?.verdict,
+    [AIP_INTEGRITY_AGENT_ID]: cp?.agent_id,
+    [AIP_INTEGRITY_CARD_ID]: cp?.card_id,
+    [AIP_INTEGRITY_SESSION_ID]: cp?.session_id,
+    [AIP_INTEGRITY_THINKING_HASH]: cp?.thinking_block_hash,
+
+    // Signal
+    [AIP_INTEGRITY_PROCEED]: signal?.proceed,
+    [AIP_INTEGRITY_RECOMMENDED_ACTION]: signal?.recommended_action,
+    [AIP_INTEGRITY_CONCERNS_COUNT]: cp?.concerns?.length,
+
+    // Analysis metadata
+    [AIP_INTEGRITY_ANALYSIS_MODEL]: meta?.analysis_model,
+    [AIP_INTEGRITY_ANALYSIS_DURATION_MS]: meta?.analysis_duration_ms,
+    [AIP_INTEGRITY_THINKING_TOKENS]: meta?.thinking_tokens_original,
+    [AIP_INTEGRITY_TRUNCATED]: meta?.truncated,
+    [AIP_INTEGRITY_EXTRACTION_CONFIDENCE]: meta?.extraction_confidence,
+
+    // Conscience context
+    [AIP_CONSCIENCE_CONSULTATION_DEPTH]: conscience?.consultation_depth,
+    [AIP_CONSCIENCE_VALUES_CHECKED_COUNT]: conscience?.values_checked?.length,
+    [AIP_CONSCIENCE_CONFLICTS_COUNT]: conscience?.conflicts?.length,
+
+    // Attestation
+    [AIP_ATTESTATION_INPUT_COMMITMENT]: att?.input_commitment,
+    [AIP_ATTESTATION_CHAIN_HASH]: att?.chain_hash,
+    [AIP_ATTESTATION_MERKLE_ROOT]: att?.merkle_root,
+    [AIP_ATTESTATION_SIGNATURE_VERIFIED]: att?.signature_verified,
+    [AIP_ATTESTATION_CERTIFICATE_ID]: att?.certificate_id,
+    [AIP_ATTESTATION_ZK_PROVEN]: att?.zk_proven,
+    [AIP_ATTESTATION_ZK_PROOF_TIME_MS]: att?.zk_proof_time_ms,
+
+    // Window summary
+    [AIP_WINDOW_SIZE]: win?.size,
+    [AIP_WINDOW_INTEGRITY_RATIO]: win?.integrity_ratio,
+    [AIP_WINDOW_DRIFT_ALERT_ACTIVE]: win?.drift_alert_active,
+
+    // Output analysis
+    [AIP_INTEGRITY_OUTPUT_HASH]: out?.output_hash,
+    [AIP_INTEGRITY_OUTPUT_TOKENS]: out?.output_tokens,
+    [AIP_INTEGRITY_OUTPUT_TRUNCATED]: out?.output_truncated,
+    [AIP_INTEGRITY_ANALYSIS_SCOPE]: out?.analysis_scope,
+
+    // GenAI SIG forward-compat aliases
+    [GEN_AI_EVALUATION_VERDICT]: cp?.verdict,
+    [GEN_AI_EVALUATION_SCORE]: win?.integrity_ratio,
+
+    // OTel GenAI SemConv — upstream provider attribution. Reads from the
+    // checkpoint's provider/model fields (set by the gateway before recording).
+    // Distinct from AIP_INTEGRITY_ANALYSIS_MODEL which names the *verifier*.
+    [GEN_AI_SYSTEM]: cp?.provider,
+    [GEN_AI_REQUEST_MODEL]: cp?.model,
+
+    // Span role disambiguates customer-path from verifier-internal and harness
+    // emissions. Defaults to "customer" when the signal omits it — preserves
+    // honest per-provider customer SLO denominators by construction.
+    [MNEMOM_SPAN_ROLE]: signal?.role ?? "customer",
+  };
+
+  // --- Events ---
+
+  const events: Array<{ name: string; attributes: Attributes }> = [];
+
+  // One event per concern
+  if (cp?.concerns) {
+    for (const concern of cp.concerns) {
+      events.push({
+        name: EVENT_AIP_CONCERN,
+        attributes: {
+          category: concern.category,
+          severity: concern.severity,
+          description: concern.description,
+        },
+      });
+    }
+  }
+
+  // Drift alert event when drift is active
+  if (win?.drift_alert_active) {
+    events.push({
+      name: EVENT_AIP_DRIFT_ALERT,
+      attributes: {},
+    });
+  }
+
+  return buildSpan(tracer, SPAN_AIP_INTEGRITY_CHECK, attributes, events);
+}
