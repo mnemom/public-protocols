@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/mnemom/public-protocols/compare/agent-integrity-proto-v1.3.0...agent-integrity-proto-v1.4.0) (2026-09-02)
+
+
+### Added
+
+* import mnemom/aip into aip/ preserving history (MNE-6778) ([182441b](https://github.com/mnemom/public-protocols/commit/182441b71e87213e65312aa000f900335e1c7faa))
+
 ## [1.3.0](https://github.com/mnemom/aip/compare/agent-integrity-proto-v1.2.0...agent-integrity-proto-v1.3.0) (2026-08-29)
 
 
