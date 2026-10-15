@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/mnemom/public-protocols/compare/agent-integrity-protocol-v1.3.0...agent-integrity-protocol-v1.4.0) (2026-09-02)
+
+
+### Added
+
+* import mnemom/aip into aip/ preserving history (MNE-6778) ([182441b](https://github.com/mnemom/public-protocols/commit/182441b71e87213e65312aa000f900335e1c7faa))
+
 ## [1.3.0](https://github.com/mnemom/aip/compare/v1.2.0...v1.3.0) (2026-08-29)
 
 
